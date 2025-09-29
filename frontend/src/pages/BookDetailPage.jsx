@@ -17,44 +17,43 @@ function BookDetailPage() {
     const [error, setError] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            setLoading(true);
-            try {
-                const bookData = await getBookByIdApi(id);
-                setBook(bookData);
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            const bookData = await getBookByIdApi(id);
+            setBook(bookData);
 
-                if (token) {
-                    const historyData = await getMyHistoryApi(token);
-                    const borrowedItem = historyData.find(item =>
-                        bookData.details.some(d => d.id === item.book_detail_id) &&
-                        (item.status === 'borrowing' || item.status === 'pending')
-                    );
-                    if (borrowedItem) {
-                        setBorrowingStatus(borrowedItem.status);
-                    } else {
-                        setBorrowingStatus(null);
-                    }
-                }
-            } catch (err) {
-                setError('Không thể tải thông tin sách.');
-            } finally {
-                setLoading(false);
+            // Nếu user đã đăng nhập, kiểm tra lịch sử mượn của họ với sách này
+            if (token) {
+                const historyData = await getMyHistoryApi(token);
+                const borrowedItem = historyData.find(item =>
+                    bookData.details.some(d => d.id === item.book_detail_id) &&
+                    (item.status === 'borrowing' || item.status === 'pending' || item.status === 'overdue')
+                );
+                // Cập nhật trạng thái mượn sách nếu tìm thấy
+                setBorrowingStatus(borrowedItem ? borrowedItem.status : null);
             }
-        };
+        } catch (err) {
+            setError('Không thể tải thông tin sách.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
         fetchData();
     }, [id, token]);
 
-    // Hàm được gọi khi mượn sách thành công từ Modal
-    const handleBorrowSuccess = () => {
-        // Cập nhật trạng thái ngay lập tức mà không cần tải lại trang
-        setBorrowingStatus('pending');
+    // Hàm callback được gọi khi mượn sách thành công từ Modal
+    const handleBorrowSuccess = (newStatus) => {
+        setBorrowingStatus(newStatus); // Cập nhật trạng thái nút bấm ngay lập tức
+        fetchData(); // Tải lại dữ liệu sách để cập nhật số lượng
     };
 
-    const physicalCopy = book?.details?.find(d => d.type === 'physical');
-    const digitalCopy = book?.details?.find(d => d.type === 'digital');
-
+    // Xử lý logic hiển thị nút bấm
     const renderBorrowButton = () => {
+        const physicalCopy = book?.details?.find(d => d.type === 'physical');
+        const digitalCopy = book?.details?.find(d => d.type === 'digital');
         let buttonProps = {
             variant: "contained",
             size: "large",
@@ -96,31 +95,61 @@ function BookDetailPage() {
     if (error) return <Alert severity="error">{error}</Alert>;
     if (!book) return <Typography>Không tìm thấy sách.</Typography>;
 
+    // Lấy thông tin phiên bản sách để hiển thị
+    const physicalCopy = book.details.find(d => d.type === 'physical');
+    const digitalCopy = book.details.find(d => d.type === 'digital');
+
     return (
         <>
             <Container maxWidth="lg">
                 <Grid container spacing={4}>
+                    {/* Cột ảnh bìa */}
                     <Grid xs={12} md={4}>
-                        <Box component="img" src={book.thumbnail || 'https://via.placeholder.com/300x450'} alt={book.title} sx={{ width: '100%', borderRadius: 2, boxShadow: 3 }}/>
+                        <Box component="img"
+                            src={book.thumbnail || 'https://via.placeholder.com/300x450'}
+                            alt={book.title}
+                            sx={{ width: '100%', borderRadius: 2, boxShadow: 3 }}
+                        />
                     </Grid>
+
+                    {/* Cột thông tin chi tiết */}
                     <Grid xs={12} md={8}>
                         <Typography variant="h3" component="h1" gutterBottom>{book.title}</Typography>
-                        <Typography variant="h5" color="text.secondary" gutterBottom>{book.author}</Typography>
-                        <Box sx={{ my: 2 }}>{book.genres?.split(',').map(genre => (<Chip key={genre} label={genre.trim()} sx={{ mr: 1, mb: 1 }} />))}</Box>
+                        <Typography variant="h5" color="text.secondary" gutterBottom>Tác giả: {book.author}</Typography>
+
+                        {/* HIỂN THỊ THỂ LOẠI SÁCH */}
+                        <Box sx={{ my: 2 }}>
+                            <Typography variant="subtitle1" component="span" fontWeight="bold">Thể loại: </Typography>
+                            {book.genres ? book.genres.split(',').map(genre => (
+                                <Chip key={genre} label={genre.trim()} sx={{ mr: 1, mb: 1 }} />
+                            )) : <Typography component="span">Chưa phân loại</Typography>}
+                        </Box>
+
                         <Divider sx={{ my: 2 }} />
                         <Typography variant="body1" paragraph>{book.description}</Typography>
                         <Divider sx={{ my: 2 }} />
-                        {physicalCopy && (<Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                            <AutoStoriesIcon sx={{ mr: 1 }} />
-                            <Typography>Sách vật lý: <strong>Còn {physicalCopy.quantity_available} / {physicalCopy.quantity_total}</strong> quyển</Typography>
-                        </Box>)}
-                        {digitalCopy && (<Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                            <BookOnlineIcon sx={{ mr: 1 }} />
-                            <Typography>Sách điện tử: <strong>Có sẵn</strong></Typography>
-                        </Box>)}
+
+                        {/* HIỂN THỊ LOẠI SÁCH CÓ SẴN */}
+                        <Typography variant="h6" gutterBottom>Các phiên bản có sẵn:</Typography>
+                        {physicalCopy && (
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                <AutoStoriesIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                                <Typography>
+                                    Sách vật lý: <strong>Còn {physicalCopy.quantity_available} / {physicalCopy.quantity_total}</strong> quyển
+                                </Typography>
+                            </Box>
+                        )}
+                        {digitalCopy && (
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                <BookOnlineIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                                <Typography>Sách điện tử: <strong>Có sẵn</strong></Typography>
+                            </Box>
+                        )}
+                        {!physicalCopy && !digitalCopy && (
+                            <Typography color="text.secondary">Hiện không có phiên bản nào.</Typography>
+                        )}
 
                         {renderBorrowButton()}
-
                     </Grid>
                 </Grid>
             </Container>

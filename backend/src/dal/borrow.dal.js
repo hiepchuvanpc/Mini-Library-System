@@ -5,9 +5,23 @@ const requestBorrow = async (userId, borrowItems) => {
     try {
         await connection.beginTransaction();
 
+        // Kiểm tra trạng thái tài khoản
         const [users] = await connection.query('SELECT account_status FROM users WHERE id = ?', [userId]);
         if (users.length > 0 && users[0].account_status === 'locked') {
             throw new Error('Tài khoản của bạn đã bị khóa do có sách mượn quá hạn. Vui lòng trả sách để tiếp tục.');
+        }
+
+        // BƯỚC MỚI: Kiểm tra xem người dùng có đang mượn hoặc đang chờ duyệt cuốn sách này không
+        for (const item of borrowItems) {
+            const [existingBorrows] = await connection.query(
+                `SELECT bh.id FROM borrowing_history bh
+                 JOIN book_details bd ON bh.book_detail_id = bd.id
+                 WHERE bh.user_id = ? AND bd.book_id = (SELECT book_id FROM book_details WHERE id = ?) AND bh.status IN ('pending', 'borrowing', 'overdue')`,
+                [userId, item.bookDetailId]
+            );
+            if (existingBorrows.length > 0) {
+                throw new Error('Bạn đã mượn hoặc đang có yêu cầu chờ duyệt cho cuốn sách này.');
+            }
         }
 
         const requestDate = new Date();
@@ -18,13 +32,10 @@ const requestBorrow = async (userId, borrowItems) => {
             const detail = details[0];
 
             if (detail.type === 'physical') {
-                // LOGIC MỚI: KIỂM TRA NGÀY HẸN LẤY SÁCH
                 const pickupDate = new Date(item.pickupDate);
                 const today = new Date();
                 const maxDate = new Date();
                 maxDate.setDate(today.getDate() + 3);
-
-                // Reset giờ, phút, giây để so sánh ngày cho chính xác
                 today.setHours(0, 0, 0, 0);
                 pickupDate.setHours(0, 0, 0, 0);
                 maxDate.setHours(0, 0, 0, 0);
@@ -32,7 +43,6 @@ const requestBorrow = async (userId, borrowItems) => {
                 if (pickupDate <= today || pickupDate > maxDate) {
                     throw new Error('Ngày hẹn lấy sách phải trong vòng 3 ngày tới.');
                 }
-
                 if (detail.quantity_available <= 0) throw new Error('Sách vật lý đã hết.');
 
                 await connection.query('UPDATE book_details SET quantity_available = quantity_available - 1 WHERE id = ?', [item.bookDetailId]);
@@ -47,8 +57,10 @@ const requestBorrow = async (userId, borrowItems) => {
             } else if (detail.type === 'digital') {
                 const borrowDate = new Date();
                 const dueDate = new Date();
+                // Sửa logic: Sách điện tử cũng cần có số ngày mượn
                 dueDate.setDate(borrowDate.getDate() + parseInt(item.durationDays, 10));
                 await connection.query(
+                    // Sửa logic: Thêm duration_days và status là 'borrowing'
                     'INSERT INTO borrowing_history (user_id, book_detail_id, request_date, borrow_date, due_date, duration_days, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
                     [userId, item.bookDetailId, requestDate, borrowDate, dueDate, item.durationDays, 'borrowing']
                 );
@@ -72,7 +84,12 @@ const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
     const connection = await pool.getConnection();
     try {
         await connection.beginTransaction();
-        const [borrowRes] = await connection.query('SELECT * FROM borrowing_history WHERE id = ? FOR UPDATE', [borrowId]);
+        const [borrowRes] = await connection.query(
+            `SELECT bh.*, bd.type FROM borrowing_history bh
+             JOIN book_details bd ON bh.book_detail_id = bd.id
+             WHERE bh.id = ? FOR UPDATE`,
+            [borrowId]
+        );
         if (borrowRes.length === 0) throw new Error('Không tìm thấy yêu cầu mượn.');
         const borrow = borrowRes[0];
 
@@ -80,7 +97,6 @@ const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
         const params = [newStatus];
 
         if (newStatus === 'borrowing') {
-            // SỬA LẠI: Chỉ cập nhật ngày mượn thực tế (ngày admin duyệt), KHÔNG tính lại due_date
             query += ', borrow_date = ?, approved_by_pickup = ?';
             params.push(new Date());
             params.push(adminId);
@@ -88,18 +104,18 @@ const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
             query += ', return_date = ?, approved_by_return = ?';
             params.push(new Date());
             params.push(adminId);
-            await connection.query('UPDATE book_details SET quantity_available = quantity_available + 1 WHERE id = ?', [borrow.book_detail_id]);
+            // SỬA LỖI: Chỉ cộng lại số lượng nếu là sách VẬT LÝ
+            if (borrow.type === 'physical') {
+                await connection.query('UPDATE book_details SET quantity_available = quantity_available + 1 WHERE id = ?', [borrow.book_detail_id]);
+            }
 
             const userId = borrow.user_id;
-            const [overdueBooks] = await connection.query(
-                "SELECT id FROM borrowing_history WHERE user_id = ? AND status = 'overdue' AND id != ?",
-                [userId, borrowId]
-            );
+            const [overdueBooks] = await connection.query("SELECT id FROM borrowing_history WHERE user_id = ? AND status = 'overdue' AND id != ?", [userId, borrowId]);
             if (overdueBooks.length === 0) {
                 await connection.query("UPDATE users SET account_status = 'active' WHERE id = ?", [userId]);
             }
         } else if (newStatus === 'cancelled') {
-            if(borrow.status === 'pending') {
+            if(borrow.status === 'pending' && borrow.type === 'physical') {
                 await connection.query('UPDATE book_details SET quantity_available = quantity_available + 1 WHERE id = ?', [borrow.book_detail_id]);
             }
         }
@@ -117,8 +133,6 @@ const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
         connection.release();
     }
 };
-
-// --- CÁC HÀM KHÁC GIỮ NGUYÊN ---
 
 const userReturnBook = async (borrowId, userId) => {
     const [borrow] = await pool.query('SELECT * FROM borrowing_history WHERE id = ? AND user_id = ?', [borrowId, userId]);
@@ -153,6 +167,5 @@ const getAllBorrowRequests = async () => {
     const [rows] = await pool.query(query);
     return rows;
 };
-
 
 module.exports = { requestBorrow, updateBorrowStatus, getHistoryForUser, getAllBorrowRequests, userReturnBook };

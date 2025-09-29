@@ -22,15 +22,12 @@ function BorrowRequestModal({ open, onClose, book, onSuccess }) {
         if(open) {
             setBorrowPhysical(false);
             setBorrowDigital(false);
-            setPickupDate(dayjs().add(1, 'day'));
-            setDurationDays(14);
         }
     }, [open]);
 
     const handleConfirmBorrow = async () => {
         setLoading(true);
         const borrowItems = [];
-
         if (borrowPhysical && physicalCopy) {
             borrowItems.push({
                 bookDetailId: physicalCopy.id,
@@ -46,7 +43,6 @@ function BorrowRequestModal({ open, onClose, book, onSuccess }) {
                 durationDays
             });
         }
-
         if (borrowItems.length === 0) {
             enqueueSnackbar('Bạn chưa chọn phiên bản sách để mượn.', { variant: 'warning' });
             setLoading(false);
@@ -56,7 +52,11 @@ function BorrowRequestModal({ open, onClose, book, onSuccess }) {
         try {
             const result = await requestBorrowApi({ borrowItems }, token);
             enqueueSnackbar(result.message, { variant: 'success' });
-            onSuccess();
+
+            // Sửa lại: Gửi tín hiệu về trạng thái mới
+            const newStatus = borrowDigital ? 'borrowing' : 'pending';
+            onSuccess(newStatus);
+
             onClose();
         } catch (err) {
             enqueueSnackbar(err.message || 'Yêu cầu thất bại', { variant: 'error' });
@@ -70,9 +70,8 @@ function BorrowRequestModal({ open, onClose, book, onSuccess }) {
             <DialogTitle>Đăng ký Mượn sách</DialogTitle>
             <DialogContent>
                 <Typography variant="body1" sx={{ mb: 2 }}>
-                    Vui lòng chọn phiên bản sách bạn muốn mượn.
+                    Vui lòng chọn phiên bản và thời gian mượn.
                 </Typography>
-
                 {physicalCopy ? (
                     <FormControlLabel
                         control={<Checkbox checked={borrowPhysical} onChange={(e) => setBorrowPhysical(e.target.checked)} />}
@@ -80,7 +79,6 @@ function BorrowRequestModal({ open, onClose, book, onSuccess }) {
                         disabled={physicalCopy.quantity_available <= 0}
                     />
                 ) : <Typography variant="body2" color="text.secondary">Không có phiên bản sách vật lý.</Typography>}
-
                 <Collapse in={borrowPhysical}>
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, pl: 2, borderLeft: '2px solid #eee' }}>
                         <DatePicker
@@ -88,30 +86,33 @@ function BorrowRequestModal({ open, onClose, book, onSuccess }) {
                             value={pickupDate}
                             onChange={(newValue) => setPickupDate(newValue)}
                             minDate={dayjs().add(1, 'day')}
-                            maxDate={dayjs().add(3, 'day')} // <-- Giới hạn chỉ được chọn tối đa 3 ngày tới
-                        />
-                        <TextField
-                            label="Số ngày mượn"
-                            type="number"
-                            value={durationDays}
-                            onChange={(e) => setDurationDays(e.target.value)}
-                            InputProps={{ inputProps: { min: 1, max: 30 } }}
+                            maxDate={dayjs().add(3, 'day')}
                         />
                     </Box>
                 </Collapse>
-
                 {digitalCopy ? (
                      <FormControlLabel
-                        sx={{ mt: 1 }}
+                        sx={{ mt: 1, display: 'block' }}
                         control={<Checkbox checked={borrowDigital} onChange={(e) => setBorrowDigital(e.target.checked)} />}
                         label="Sách điện tử (Có sẵn)"
                     />
                 ) : <Typography variant="body2" color="text.secondary" sx={{mt: 1}}>Không có phiên bản sách điện tử.</Typography>}
+                {(borrowPhysical || borrowDigital) && (
+                    <TextField
+                        sx={{mt: 2}}
+                        fullWidth
+                        label="Số ngày mượn"
+                        type="number"
+                        value={durationDays}
+                        onChange={(e) => setDurationDays(e.target.value)}
+                        InputProps={{ inputProps: { min: 1, max: 30 } }}
+                    />
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} disabled={loading}>Hủy</Button>
                 <Button onClick={handleConfirmBorrow} variant="contained" disabled={loading || (!borrowPhysical && !borrowDigital)}>
-                    {loading ? 'Đang xử lý...' : 'Xác nhận'}
+                    Xác nhận
                 </Button>
             </DialogActions>
         </Dialog>
