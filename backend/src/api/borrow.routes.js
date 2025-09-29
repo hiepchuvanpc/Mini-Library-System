@@ -1,3 +1,5 @@
+// src/api/borrow.routes.js
+
 const express = require('express');
 const router = express.Router();
 const borrowDAL = require('../dal/borrow.dal');
@@ -28,8 +30,28 @@ router.get('/my-history', isAuth, async (req, res) => {
     }
 });
 
+// === ROUTE ĐƯỢC CẬP NHẬT LOGIC ===
+router.get('/my-shelf', isAuth, async (req, res) => {
+    try {
+        const currentBorrows = await borrowDAL.getCurrentBorrowsForUser(req.user.id);
+        const returnedHistory = await borrowDAL.getReturnedHistoryForUser(req.user.id);
+
+        // Trả về một object chứa cả hai danh sách
+        res.json({
+            current: currentBorrows,
+            returned: returnedHistory
+        });
+    } catch (error) {
+        console.error("Error in /borrows/my-shelf:", error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
 router.patch('/my-history/:id/return', isAuth, async (req, res) => {
     try {
+        // Chú ý: Route này vẫn đúng, vì 'my-history' chỉ là tên,
+        // hành động là "return" một "borrowing_history" record.
         const result = await borrowDAL.userReturnBook(req.params.id, req.user.id);
         res.json(result);
     } catch (error) {

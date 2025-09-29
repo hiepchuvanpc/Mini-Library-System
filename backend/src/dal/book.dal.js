@@ -1,15 +1,66 @@
+// src/dal/book.dal.js
+
 const { pool } = require('../config/database');
+
+/**
+ * Hàm helper để xử lý việc thêm/sửa tác giả cho một cuốn sách.
+ * Nó sẽ tách chuỗi tên tác giả, tìm hoặc tạo mới tác giả trong bảng `authors`,
+ * và tạo liên kết trong bảng `book_authors`.
+ * @param {object} connection - Một connection transaction đang hoạt động.
+ * @param {number} bookId - ID của cuốn sách đang được xử lý.
+ * @param {string} authorString - Chuỗi tên các tác giả, phân cách bằng dấu phẩy.
+ */
+const handleAuthors = async (connection, bookId, authorString) => {
+    // Luôn xóa các liên kết tác giả cũ để đảm bảo dữ liệu mới là chính xác
+    await connection.query('DELETE FROM book_authors WHERE book_id = ?', [bookId]);
+
+    // Nếu không có chuỗi tác giả hoặc chuỗi rỗng thì dừng lại
+    if (!authorString || authorString.trim() === '') return;
+
+    // Tách chuỗi, làm sạch và loại bỏ các tên rỗng
+    const authorNames = authorString.split(',').map(name => name.trim()).filter(name => name);
+    if (authorNames.length === 0) return;
+
+    for (const name of authorNames) {
+        // Kiểm tra xem tác giả đã tồn tại trong bảng `authors` chưa
+        let [authorRows] = await connection.query('SELECT id FROM authors WHERE name = ?', [name]);
+        let authorId;
+
+        if (authorRows.length === 0) {
+            // Nếu chưa, tạo mới tác giả
+            const [result] = await connection.query('INSERT INTO authors (name) VALUES (?)', [name]);
+            authorId = result.insertId;
+        } else {
+            // Nếu đã có, lấy ID
+            authorId = authorRows[0].id;
+        }
+        // Tạo liên kết trong bảng `book_authors`
+        await connection.query('INSERT INTO book_authors (book_id, author_id) VALUES (?, ?)', [bookId, authorId]);
+    }
+};
 
 const createBook = async (bookData, detailsData, genreIds) => {
     const connection = await pool.getConnection();
     try {
         await connection.beginTransaction();
         const { title, author, isbn, description, thumbnail } = bookData;
+
+        // Bảng `books` giờ không còn cột `author`
         const [bookResult] = await connection.query(
-            'INSERT INTO books (title, author, isbn, description, thumbnail) VALUES (?, ?, ?, ?, ?)',
-            [title, author, isbn, description, thumbnail]
+            'INSERT INTO books (title, isbn, description, thumbnail) VALUES (?, ?, ?, ?)',
+            [title, isbn, description, thumbnail]
         );
         const bookId = bookResult.insertId;
+
+        // Xử lý tác giả và thể loại bằng các hàm helper
+        await handleAuthors(connection, bookId, author);
+
+        if (genreIds && genreIds.length > 0) {
+            const genreValues = genreIds.map(genreId => [bookId, genreId]);
+            await connection.query('INSERT INTO book_genres (book_id, genre_id) VALUES ?', [genreValues]);
+        }
+
+        // Xử lý details (không đổi)
         if (detailsData && detailsData.length > 0) {
             for (const detail of detailsData) {
                 await connection.query(
@@ -18,10 +69,7 @@ const createBook = async (bookData, detailsData, genreIds) => {
                 );
             }
         }
-        if (genreIds && genreIds.length > 0) {
-            const genreValues = genreIds.map(genreId => [bookId, genreId]);
-            await connection.query('INSERT INTO book_genres (book_id, genre_id) VALUES ?', [genreValues]);
-        }
+
         await connection.commit();
         return { id: bookId, ...bookData };
     } catch (error) {
@@ -38,15 +86,23 @@ const updateBook = async (bookId, bookData, detailsData, genreIds, newDigitalUrl
     try {
         await connection.beginTransaction();
         const { title, author, isbn, description, thumbnail } = bookData;
+
+        // Cập nhật bảng `books` (không có cột `author`)
         await connection.query(
-            'UPDATE books SET title = ?, author = ?, isbn = ?, description = ?, thumbnail = ? WHERE id = ?',
-            [title, author, isbn, description, thumbnail, bookId]
+            'UPDATE books SET title = ?, isbn = ?, description = ?, thumbnail = ? WHERE id = ?',
+            [title, isbn, description, thumbnail, bookId]
         );
+
+        // Xử lý lại toàn bộ tác giả và thể loại
+        await handleAuthors(connection, bookId, author);
+
         await connection.query('DELETE FROM book_genres WHERE book_id = ?', [bookId]);
         if (genreIds && genreIds.length > 0) {
             const genreValues = genreIds.map(genreId => [bookId, genreId]);
             await connection.query('INSERT INTO book_genres (book_id, genre_id) VALUES ?', [genreValues]);
         }
+
+        // Xử lý details (không đổi)
         if (newDigitalUrl) {
             if (existingDigitalDetail) {
                 await connection.query('UPDATE book_details SET location_or_url = ? WHERE id = ?', [newDigitalUrl, existingDigitalDetail.id]);
@@ -80,6 +136,7 @@ const updateBook = async (bookId, bookData, detailsData, genreIds, newDigitalUrl
         if (detailsToDelete.length > 0) {
             await connection.query('DELETE FROM book_details WHERE id IN (?)', [detailsToDelete]);
         }
+
         await connection.commit();
         return { id: bookId, ...bookData };
     } catch (error) {
@@ -91,11 +148,16 @@ const updateBook = async (bookId, bookData, detailsData, genreIds, newDigitalUrl
     }
 };
 
+// --- CẬP NHẬT CÁC HÀM SELECT ---
+const getAuthorString = `(SELECT GROUP_CONCAT(a.name SEPARATOR ', ') FROM authors a JOIN book_authors ba ON a.id = ba.author_id WHERE ba.book_id = b.id)`;
+
 const findBookById = async (id) => {
     const bookQuery = `
         SELECT
             b.*,
-            GROUP_CONCAT(DISTINCT g.id) as genre_ids
+            ${getAuthorString} as author,
+            GROUP_CONCAT(DISTINCT g.id) as genre_ids,
+            GROUP_CONCAT(DISTINCT g.name SEPARATOR ', ') as genre_names
         FROM books b
         LEFT JOIN book_genres bg ON b.id = bg.book_id
         LEFT JOIN genres g ON bg.genre_id = g.id
@@ -114,13 +176,16 @@ const findBookById = async (id) => {
 const searchBooks = async (term) => {
     const query = `
         SELECT DISTINCT
-            b.id, b.title, b.author, b.isbn, b.thumbnail
+            b.id, b.title, b.isbn, b.thumbnail,
+            ${getAuthorString} as author
         FROM books b
         LEFT JOIN book_genres bg ON b.id = bg.book_id
         LEFT JOIN genres g ON bg.genre_id = g.id
+        LEFT JOIN book_authors ba ON b.id = ba.book_id
+        LEFT JOIN authors a ON ba.author_id = a.id
         WHERE
             b.title LIKE ? OR
-            b.author LIKE ? OR
+            a.name LIKE ? OR
             b.isbn LIKE ? OR
             g.name LIKE ?
         LIMIT 10
@@ -133,7 +198,8 @@ const searchBooks = async (term) => {
 const getAllBooksForAdmin = async () => {
     const query = `
         SELECT
-            b.id, b.title, b.author, b.isbn, b.thumbnail
+            b.id, b.title, b.isbn, b.thumbnail,
+            ${getAuthorString} as author
         FROM books b
         ORDER BY b.created_at DESC
     `;
@@ -158,5 +224,5 @@ module.exports = {
     searchBooks,
     getAllBooksForAdmin,
     deleteBook,
-    deleteBookDetail
+    deleteBookDetail,
 };

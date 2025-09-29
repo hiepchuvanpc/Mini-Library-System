@@ -85,9 +85,16 @@ const getAllBooks = async () => {
     return await bookDAL.getAllBooksForAdmin();
 };
 
+// === HÀM XÓA ĐÃ ĐƯỢC CẬP NHẬT LOGIC KIỂM TRA ===
 const removeBook = async (id) => {
+    // Không cần kiểm tra lịch sử nữa, CSDL sẽ tự xử lý (SET NULL)
+
     const existingBook = await bookDAL.findBookById(id);
-    if (!existingBook) throw new Error('Không tìm thấy sách để xóa.');
+    if (!existingBook) {
+        throw new Error('Không tìm thấy sách để xóa.');
+    }
+
+    // Xóa các file liên quan trên Cloudinary
     if (existingBook.thumbnail && !existingBook.thumbnail.includes('placeholder')) {
         await deleteFile(existingBook.thumbnail);
     }
@@ -95,8 +102,13 @@ const removeBook = async (id) => {
     for (const detail of digitalDetails) {
         await deleteFile(detail.location_or_url);
     }
+
+    // Tiến hành xóa sách khỏi cơ sở dữ liệu.
+    // ON DELETE CASCADE sẽ xóa book_details.
+    // ON DELETE SET NULL sẽ cập nhật borrowing_history.
     await bookDAL.deleteBook(id);
-    return { message: 'Xóa sách thành công.' };
+
+    return { message: 'Xóa sách thành công. Lịch sử mượn liên quan đã được bảo toàn.' };
 };
 
 module.exports = { addBook, editBook, getBookDetails, findBookByIsbn, searchBooks, getAllBooks, removeBook };

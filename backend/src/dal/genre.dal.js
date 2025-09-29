@@ -20,14 +20,26 @@ const updateGenre = async (id, name) => {
     return { id, name };
 };
 
+// === HÀM XÓA ĐÃ ĐƯỢC CẬP NHẬT LOGIC ===
 const deleteGenre = async (id) => {
-    // Sửa lại câu lệnh SQL để kiểm tra trong bảng book_genres
-    const [books] = await pool.query('SELECT book_id FROM book_genres WHERE genre_id = ?', [id]);
-    if (books.length > 0) {
-        throw new Error('Không thể xóa thể loại đã có sách.');
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // Bước 1: Xóa tất cả các liên kết của thể loại này trong bảng book_genres
+        await connection.query('DELETE FROM book_genres WHERE genre_id = ?', [id]);
+
+        // Bước 2: Xóa chính thể loại đó trong bảng genres
+        await connection.query('DELETE FROM genres WHERE id = ?', [id]);
+
+        await connection.commit();
+        return { id };
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
     }
-    await pool.query('DELETE FROM genres WHERE id = ?', [id]);
-    return { id };
 };
 
 module.exports = {
