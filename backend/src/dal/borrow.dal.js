@@ -6,7 +6,7 @@ const requestBorrow = async (userId, borrowItems) => {
         await connection.beginTransaction();
 
         const [users] = await connection.query('SELECT account_status FROM users WHERE id = ?', [userId]);
-        if (users[0].account_status === 'locked') {
+        if (users.length > 0 && users[0].account_status === 'locked') {
             throw new Error('Tài khoản của bạn đã bị khóa do có sách mượn quá hạn. Vui lòng trả sách để tiếp tục.');
         }
 
@@ -18,66 +18,54 @@ const requestBorrow = async (userId, borrowItems) => {
             const detail = details[0];
 
             if (detail.type === 'physical') {
+                // LOGIC MỚI: KIỂM TRA NGÀY HẸN LẤY SÁCH
+                const pickupDate = new Date(item.pickupDate);
+                const today = new Date();
+                const maxDate = new Date();
+                maxDate.setDate(today.getDate() + 3);
+
+                // Reset giờ, phút, giây để so sánh ngày cho chính xác
+                today.setHours(0, 0, 0, 0);
+                pickupDate.setHours(0, 0, 0, 0);
+                maxDate.setHours(0, 0, 0, 0);
+
+                if (pickupDate <= today || pickupDate > maxDate) {
+                    throw new Error('Ngày hẹn lấy sách phải trong vòng 3 ngày tới.');
+                }
+
                 if (detail.quantity_available <= 0) throw new Error('Sách vật lý đã hết.');
+
                 await connection.query('UPDATE book_details SET quantity_available = quantity_available - 1 WHERE id = ?', [item.bookDetailId]);
+
                 const dueDate = new Date(item.pickupDate);
                 dueDate.setDate(dueDate.getDate() + parseInt(item.durationDays, 10));
+
                 await connection.query(
-                    'INSERT INTO borrowing_history (user_id, book_detail_id, request_date, borrow_date, due_date, status) VALUES (?, ?, ?, ?, ?, ?)',
-                    [userId, item.bookDetailId, requestDate, item.pickupDate, dueDate, 'pending']
+                    'INSERT INTO borrowing_history (user_id, book_detail_id, request_date, borrow_date, due_date, duration_days, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [userId, item.bookDetailId, requestDate, item.pickupDate, dueDate, item.durationDays, 'pending']
                 );
             } else if (detail.type === 'digital') {
                 const borrowDate = new Date();
                 const dueDate = new Date();
                 dueDate.setDate(borrowDate.getDate() + parseInt(item.durationDays, 10));
                 await connection.query(
-                    'INSERT INTO borrowing_history (user_id, book_detail_id, request_date, borrow_date, due_date, status) VALUES (?, ?, ?, ?, ?, ?)',
-                    [userId, item.bookDetailId, requestDate, borrowDate, dueDate, 'borrowing']
+                    'INSERT INTO borrowing_history (user_id, book_detail_id, request_date, borrow_date, due_date, duration_days, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [userId, item.bookDetailId, requestDate, borrowDate, dueDate, item.durationDays, 'borrowing']
                 );
             }
         }
         await connection.commit();
-        return { success: true, message: 'Yêu cầu mượn sách của bạn đã được ghi nhận.' };
+        const physicalRequest = borrowItems.find(i => i.type === 'physical');
+        const message = physicalRequest
+            ? `Đăng ký mượn thành công. Lịch lấy sách của bạn là ngày ${new Date(physicalRequest.pickupDate).toLocaleDateString()}.`
+            : 'Mượn sách điện tử thành công.';
+        return { success: true, message };
     } catch (error) {
         await connection.rollback();
         throw error;
     } finally {
         connection.release();
     }
-};
-
-const userReturnBook = async (borrowId, userId) => {
-    const [borrow] = await pool.query('SELECT * FROM borrowing_history WHERE id = ? AND user_id = ?', [borrowId, userId]);
-    if (borrow.length === 0) throw new Error('Không tìm thấy yêu cầu mượn này.');
-    if (borrow[0].status !== 'borrowing') throw new Error('Không thể trả sách không ở trạng thái "Đang mượn".');
-    await pool.query('UPDATE borrowing_history SET status = ?, return_date = ? WHERE id = ?', ['returned', new Date(), borrowId]);
-    return { success: true, message: 'Trả sách thành công.' };
-};
-
-const getHistoryForUser = async (userId) => {
-    const query = `
-        SELECT bh.id, bh.status, bh.request_date, bh.borrow_date, bh.due_date, bh.return_date, b.title, b.thumbnail, bd.type, bd.location_or_url
-        FROM borrowing_history bh
-        LEFT JOIN book_details bd ON bh.book_detail_id = bd.id
-        LEFT JOIN books b ON bd.book_id = b.id
-        WHERE bh.user_id = ?
-        ORDER BY bh.request_date DESC
-    `;
-    const [rows] = await pool.query(query, [userId]);
-    return rows;
-};
-
-const getAllBorrowRequests = async () => {
-    const query = `
-        SELECT bh.id, bh.status, bh.request_date, bh.due_date, b.title, u.username, bd.type
-        FROM borrowing_history bh
-        LEFT JOIN book_details bd ON bh.book_detail_id = bd.id
-        LEFT JOIN books b ON bd.book_id = b.id
-        LEFT JOIN users u ON bh.user_id = u.id
-        ORDER BY bh.request_date DESC
-    `;
-    const [rows] = await pool.query(query);
-    return rows;
 };
 
 const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
@@ -92,6 +80,7 @@ const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
         const params = [newStatus];
 
         if (newStatus === 'borrowing') {
+            // SỬA LẠI: Chỉ cập nhật ngày mượn thực tế (ngày admin duyệt), KHÔNG tính lại due_date
             query += ', borrow_date = ?, approved_by_pickup = ?';
             params.push(new Date());
             params.push(adminId);
@@ -129,4 +118,41 @@ const updateBorrowStatus = async (borrowId, newStatus, adminId) => {
     }
 };
 
-module.exports = { requestBorrow, getHistoryForUser, getAllBorrowRequests, updateBorrowStatus, userReturnBook };
+// --- CÁC HÀM KHÁC GIỮ NGUYÊN ---
+
+const userReturnBook = async (borrowId, userId) => {
+    const [borrow] = await pool.query('SELECT * FROM borrowing_history WHERE id = ? AND user_id = ?', [borrowId, userId]);
+    if (borrow.length === 0) throw new Error('Không tìm thấy yêu cầu mượn này.');
+    if (borrow[0].status !== 'borrowing') throw new Error('Không thể trả sách không ở trạng thái "Đang mượn".');
+    await pool.query('UPDATE borrowing_history SET status = ?, return_date = ? WHERE id = ?', ['returned', new Date(), borrowId]);
+    return { success: true, message: 'Trả sách thành công.' };
+};
+
+const getHistoryForUser = async (userId) => {
+    const query = `
+        SELECT bh.id, bh.status, bh.request_date, bh.borrow_date, bh.due_date, bh.return_date, b.title, b.thumbnail, bd.type, bd.location_or_url
+        FROM borrowing_history bh
+        LEFT JOIN book_details bd ON bh.book_detail_id = bd.id
+        LEFT JOIN books b ON bd.book_id = b.id
+        WHERE bh.user_id = ?
+        ORDER BY bh.request_date DESC
+    `;
+    const [rows] = await pool.query(query, [userId]);
+    return rows;
+};
+
+const getAllBorrowRequests = async () => {
+    const query = `
+        SELECT bh.id, bh.status, bh.request_date, bh.due_date, b.title, u.username, bd.type
+        FROM borrowing_history bh
+        LEFT JOIN book_details bd ON bh.book_detail_id = bd.id
+        LEFT JOIN books b ON bd.book_id = b.id
+        LEFT JOIN users u ON bh.user_id = u.id
+        ORDER BY bh.request_date DESC
+    `;
+    const [rows] = await pool.query(query);
+    return rows;
+};
+
+
+module.exports = { requestBorrow, updateBorrowStatus, getHistoryForUser, getAllBorrowRequests, userReturnBook };

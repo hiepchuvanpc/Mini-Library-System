@@ -6,12 +6,10 @@ import { useAuth } from '../context/AuthContext';
 import { requestBorrowApi } from '../api/borrow.api';
 import { useSnackbar } from 'notistack';
 
-function BorrowRequestModal({ open, onClose, book }) {
+function BorrowRequestModal({ open, onClose, book, onSuccess }) {
     const { token } = useAuth();
     const { enqueueSnackbar } = useSnackbar();
     const [loading, setLoading] = useState(false);
-
-    // State cho các lựa chọn
     const [borrowPhysical, setBorrowPhysical] = useState(false);
     const [borrowDigital, setBorrowDigital] = useState(false);
     const [pickupDate, setPickupDate] = useState(dayjs().add(1, 'day'));
@@ -20,9 +18,8 @@ function BorrowRequestModal({ open, onClose, book }) {
     const physicalCopy = book?.details?.find(d => d.type === 'physical');
     const digitalCopy = book?.details?.find(d => d.type === 'digital');
 
-    // Reset state khi modal đóng/mở hoặc sách thay đổi
     useEffect(() => {
-        if (open) {
+        if(open) {
             setBorrowPhysical(false);
             setBorrowDigital(false);
             setPickupDate(dayjs().add(1, 'day'));
@@ -32,9 +29,8 @@ function BorrowRequestModal({ open, onClose, book }) {
 
     const handleConfirmBorrow = async () => {
         setLoading(true);
-        const borrowItems = []; // <-- Xây dựng mảng này để gửi đi
+        const borrowItems = [];
 
-        // Nếu người dùng chọn mượn sách vật lý
         if (borrowPhysical && physicalCopy) {
             borrowItems.push({
                 bookDetailId: physicalCopy.id,
@@ -43,16 +39,14 @@ function BorrowRequestModal({ open, onClose, book }) {
                 durationDays
             });
         }
-        // Nếu người dùng chọn mượn sách điện tử
         if (borrowDigital && digitalCopy) {
             borrowItems.push({
                 bookDetailId: digitalCopy.id,
                 type: 'digital',
-                durationDays // Sách điện tử không cần ngày hẹn
+                durationDays
             });
         }
 
-        // Kiểm tra lại trước khi gửi
         if (borrowItems.length === 0) {
             enqueueSnackbar('Bạn chưa chọn phiên bản sách để mượn.', { variant: 'warning' });
             setLoading(false);
@@ -62,6 +56,7 @@ function BorrowRequestModal({ open, onClose, book }) {
         try {
             const result = await requestBorrowApi({ borrowItems }, token);
             enqueueSnackbar(result.message, { variant: 'success' });
+            onSuccess();
             onClose();
         } catch (err) {
             enqueueSnackbar(err.message || 'Yêu cầu thất bại', { variant: 'error' });
@@ -78,7 +73,6 @@ function BorrowRequestModal({ open, onClose, book }) {
                     Vui lòng chọn phiên bản sách bạn muốn mượn.
                 </Typography>
 
-                {/* Lựa chọn sách vật lý */}
                 {physicalCopy ? (
                     <FormControlLabel
                         control={<Checkbox checked={borrowPhysical} onChange={(e) => setBorrowPhysical(e.target.checked)} />}
@@ -87,7 +81,6 @@ function BorrowRequestModal({ open, onClose, book }) {
                     />
                 ) : <Typography variant="body2" color="text.secondary">Không có phiên bản sách vật lý.</Typography>}
 
-                {/* Form đặt lịch chỉ hiện khi chọn sách vật lý */}
                 <Collapse in={borrowPhysical}>
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, pl: 2, borderLeft: '2px solid #eee' }}>
                         <DatePicker
@@ -95,6 +88,7 @@ function BorrowRequestModal({ open, onClose, book }) {
                             value={pickupDate}
                             onChange={(newValue) => setPickupDate(newValue)}
                             minDate={dayjs().add(1, 'day')}
+                            maxDate={dayjs().add(3, 'day')} // <-- Giới hạn chỉ được chọn tối đa 3 ngày tới
                         />
                         <TextField
                             label="Số ngày mượn"
@@ -106,7 +100,6 @@ function BorrowRequestModal({ open, onClose, book }) {
                     </Box>
                 </Collapse>
 
-                {/* Lựa chọn sách điện tử */}
                 {digitalCopy ? (
                      <FormControlLabel
                         sx={{ mt: 1 }}
@@ -118,7 +111,7 @@ function BorrowRequestModal({ open, onClose, book }) {
             <DialogActions>
                 <Button onClick={onClose} disabled={loading}>Hủy</Button>
                 <Button onClick={handleConfirmBorrow} variant="contained" disabled={loading || (!borrowPhysical && !borrowDigital)}>
-                    Xác nhận
+                    {loading ? 'Đang xử lý...' : 'Xác nhận'}
                 </Button>
             </DialogActions>
         </Dialog>
