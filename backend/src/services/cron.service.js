@@ -4,7 +4,6 @@ const { pool } = require('../config/database');
 const startScheduledTasks = () => {
     console.log('⏰ Scheduled tasks started. Daily check will run at 1:00 AM.');
 
-    // Chạy tác vụ vào 1 giờ sáng mỗi ngày
     cron.schedule('0 1 * * *', async () => {
         console.log('Running daily check for overdue books...');
         const connection = await pool.getConnection();
@@ -12,15 +11,23 @@ const startScheduledTasks = () => {
             await connection.beginTransaction();
             const today = new Date();
 
-            // 1. Tự động trả sách điện tử đã quá hạn
+            // 1. Tự động trả sách điện tử quá hạn
+            // Sửa lại: Thêm JOIN để lấy type
             await connection.query(
-                "UPDATE borrowing_history SET status = 'returned', return_date = ? WHERE status = 'borrowing' AND type = 'digital' AND due_date < ?",
+                `UPDATE borrowing_history bh
+                 JOIN book_details bd ON bh.book_detail_id = bd.id
+                 SET bh.status = 'returned', bh.return_date = ?
+                 WHERE bh.status = 'borrowing' AND bd.type = 'digital' AND bh.due_date < ?`,
                 [today, today]
             );
 
             // 2. Cập nhật trạng thái 'overdue' cho sách vật lý quá hạn
+            // Sửa lại: Thêm JOIN để lấy type
             await connection.query(
-                "UPDATE borrowing_history SET status = 'overdue' WHERE status = 'borrowing' AND type = 'physical' AND due_date < ?",
+                `UPDATE borrowing_history bh
+                 JOIN book_details bd ON bh.book_detail_id = bd.id
+                 SET bh.status = 'overdue'
+                 WHERE bh.status = 'borrowing' AND bd.type = 'physical' AND bh.due_date < ?`,
                 [today]
             );
 

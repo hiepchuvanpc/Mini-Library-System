@@ -83,7 +83,7 @@ function SearchPage() {
                         <motion.div layout>
                             <Grid container spacing={3} sx={{ mt: 2 }}>
                                 {books.length > 0 ? books.map(book => (
-                                    <Grid item key={book.id} xs={12} sm={6} md={4} lg={3}>
+                                    <Grid key={book.id} xs={12} sm={6} md={4} lg={3}>
                                         <motion.div
                                             layout
                                             initial={{ opacity: 0, scale: 0.8 }}

@@ -100,10 +100,10 @@ function BookDetailPage() {
         <>
             <Container maxWidth="lg">
                 <Grid container spacing={4}>
-                    <Grid item xs={12} md={4}>
+                    <Grid xs={12} md={4}>
                         <Box component="img" src={book.thumbnail || 'https://via.placeholder.com/300x450'} alt={book.title} sx={{ width: '100%', borderRadius: 2, boxShadow: 3 }}/>
                     </Grid>
-                    <Grid item xs={12} md={8}>
+                    <Grid xs={12} md={8}>
                         <Typography variant="h3" component="h1" gutterBottom>{book.title}</Typography>
                         <Typography variant="h5" color="text.secondary" gutterBottom>{book.author}</Typography>
                         <Box sx={{ my: 2 }}>{book.genres?.split(',').map(genre => (<Chip key={genre} label={genre.trim()} sx={{ mr: 1, mb: 1 }} />))}</Box>

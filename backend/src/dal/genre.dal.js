@@ -21,8 +21,8 @@ const updateGenre = async (id, name) => {
 };
 
 const deleteGenre = async (id) => {
-    // Cần kiểm tra xem có sách nào thuộc thể loại này không trước khi xóa
-    const [books] = await pool.query('SELECT id FROM books WHERE genre_id = ?', [id]);
+    // Sửa lại câu lệnh SQL để kiểm tra trong bảng book_genres
+    const [books] = await pool.query('SELECT book_id FROM book_genres WHERE genre_id = ?', [id]);
     if (books.length > 0) {
         throw new Error('Không thể xóa thể loại đã có sách.');
     }
